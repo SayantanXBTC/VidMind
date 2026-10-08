@@ -24,6 +24,7 @@ os.environ.update(
         "ALLOWED_ORIGINS": "https://app.example.com",
         "FORCE_HTTPS": "true",
         "ENABLE_DOCS": "false",
+        "UPLOAD_TMP_DIR": _TMP + "/uploads",
     }
 )
 

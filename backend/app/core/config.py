@@ -60,6 +60,17 @@ class Settings:
     YTDLP_COOKIES_FILE: str = os.getenv("YTDLP_COOKIES_FILE", "").strip()
     YTDLP_COOKIES_FROM_BROWSER: str = os.getenv("YTDLP_COOKIES_FROM_BROWSER", "").strip()
 
+    # --- Video file uploads ---
+    ENABLE_UPLOADS: bool = _bool_env("ENABLE_UPLOADS", True)
+    MAX_UPLOAD_MB: int = int(os.getenv("MAX_UPLOAD_MB", "500"))
+    # faster-whisper model: tiny / base / small / medium. "small" is a good
+    # balance of accuracy and CPU time.
+    WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "small")
+    WHISPER_THREADS: int = int(os.getenv("WHISPER_THREADS", str(max(1, min(8, os.cpu_count() or 2)))))
+    # Transcriptions running at the same time (each keeps several cores busy).
+    TRANSCRIBE_CONCURRENCY: int = int(os.getenv("TRANSCRIBE_CONCURRENCY", "1"))
+    UPLOAD_TMP_DIR: Path = Path(os.getenv("UPLOAD_TMP_DIR", "/tmp/vidmind-uploads"))
+
     # --- Cache ---
     # Finished analyses are kept per YouTube video, so a video anyone already
     # analyzed is served again for free. In memory, mirrored to this folder
@@ -89,3 +100,4 @@ class Settings:
 
 settings = Settings()
 settings.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+settings.UPLOAD_TMP_DIR.mkdir(parents=True, exist_ok=True)

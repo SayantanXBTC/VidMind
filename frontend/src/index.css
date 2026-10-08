@@ -2,6 +2,13 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Animatable angle for the rotating gradient borders. */
+@property --angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
 @layer base {
   html {
     color-scheme: dark;
@@ -18,41 +25,60 @@
 }
 
 @layer components {
-  /* Small uppercase label above sections. */
   .eyebrow {
-    @apply font-mono text-[11px] font-medium uppercase tracking-[0.18em] text-neutral-500;
+    @apply font-mono text-[11px] font-medium uppercase tracking-[0.2em] text-neutral-500;
   }
 
-  /* Raised surface with a hairline border and a faint top highlight. */
+  /* Glass surface with a hairline border and a faint top highlight. */
   .card {
-    @apply rounded-3xl border border-white/[0.07] bg-ink-900/80 shadow-card backdrop-blur-xl;
+    @apply rounded-3xl border border-white/[0.07] bg-ink-900/70 shadow-card backdrop-blur-xl;
   }
 
   .card-hover {
-    @apply transition duration-300 hover:-translate-y-0.5 hover:border-white/[0.14] hover:bg-ink-850/90;
+    @apply transition duration-500 hover:-translate-y-1 hover:border-white/[0.14];
   }
 
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-full px-5 py-2.5 text-sm font-medium transition duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-ink-950 disabled:cursor-not-allowed disabled:opacity-40;
+    @apply relative inline-flex items-center justify-center gap-2 overflow-hidden rounded-full px-5 py-2.5 text-sm font-medium transition duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-ink-950 disabled:cursor-not-allowed disabled:opacity-40;
   }
 
   .btn-primary {
-    @apply btn bg-white text-ink-950 hover:bg-neutral-200;
+    @apply btn bg-white text-ink-950 shadow-[0_8px_30px_-8px_rgba(255,255,255,0.35)] hover:bg-neutral-100;
+  }
+
+  /* Light sweep across primary buttons on hover. */
+  .btn-primary::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-120%);
+    background: linear-gradient(100deg, transparent 30%, rgba(139, 108, 255, 0.25) 50%, transparent 70%);
+    transition: transform 0.7s ease;
+  }
+  .btn-primary:hover::after {
+    transform: translateX(120%);
   }
 
   .btn-ghost {
-    @apply btn border border-white/10 text-neutral-200 hover:border-white/20 hover:bg-white/[0.04];
+    @apply btn border border-white/10 bg-white/[0.02] text-neutral-200 hover:border-white/25 hover:bg-white/[0.06];
   }
 
   .btn-quiet {
-    @apply btn px-3 py-1.5 text-neutral-400 hover:bg-white/[0.04] hover:text-neutral-100;
+    @apply btn px-3 py-1.5 text-neutral-400 hover:bg-white/[0.05] hover:text-neutral-100;
   }
 
   .input {
     @apply w-full rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm text-neutral-100 placeholder-neutral-600 transition focus:border-accent/40 focus:bg-white/[0.05] focus:outline-none focus:ring-4 focus:ring-accent/10;
   }
 
+  /* Slowly shifting gradient text. */
   .text-gradient {
+    background-image: linear-gradient(110deg, #ffffff 10%, #e2d9ff 30%, #b9a6ff 50%, #7fe7ff 70%, #ffffff 90%);
+    background-size: 220% auto;
+    @apply animate-gradient-x bg-clip-text text-transparent;
+  }
+
+  .text-gradient-static {
     @apply bg-gradient-to-br from-white via-[#E9E1FF] to-accent bg-clip-text text-transparent;
   }
 
@@ -67,15 +93,61 @@
   .timestamp {
     @apply font-mono text-[12px] tabular-nums text-accent/90;
   }
+
+  /* A rotating conic-gradient border. Put content in a child with its own background. */
+  .glow-border {
+    position: relative;
+    isolation: isolate;
+  }
+  .glow-border::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    z-index: -1;
+    border-radius: inherit;
+    padding: 1px;
+    background: conic-gradient(
+      from var(--angle),
+      rgba(139, 108, 255, 0.05),
+      rgba(139, 108, 255, 0.9),
+      rgba(127, 231, 255, 0.7),
+      rgba(242, 210, 155, 0.6),
+      rgba(139, 108, 255, 0.05) 70%
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    animation: spin-border 6s linear infinite;
+  }
+
+  /* Soft light that follows the cursor (set --x / --y from JS). */
+  .spotlight {
+    position: relative;
+  }
+  .spotlight::after {
+    content: '';
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+    background: radial-gradient(420px circle at var(--x, 50%) var(--y, 50%), rgba(185, 166, 255, 0.12), transparent 45%);
+  }
+  .spotlight:hover::after {
+    opacity: 1;
+  }
 }
 
-/* Film-grain overlay that keeps the large dark surfaces from looking flat. */
+/* Film grain so the dark surfaces don't look flat. */
 .grain::before {
   content: '';
   position: fixed;
   inset: 0;
   pointer-events: none;
-  z-index: 1;
+  z-index: 60;
   opacity: 0.035;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
@@ -83,26 +155,22 @@
 .bg-grid {
   background-image: linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
-  background-size: 56px 56px;
-  mask-image: radial-gradient(ellipse at 50% 0%, black 20%, transparent 70%);
+  background-size: 64px 64px;
+  mask-image: radial-gradient(ellipse at 50% 0%, black 15%, transparent 70%);
 }
 
-/* Thin, dark scrollbars for transcript and result panels. */
 * {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
 }
-
 *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-
 *::-webkit-scrollbar-thumb {
   background-color: rgba(255, 255, 255, 0.12);
   border-radius: 9999px;
 }
-
 *::-webkit-scrollbar-track {
   background: transparent;
 }

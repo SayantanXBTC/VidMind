@@ -1,12 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import AppHeader, { USAGE_CHANGED } from '../components/AppHeader.jsx'
+import Background from '../components/Background.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
 import ProcessingTimeline from '../components/ProcessingTimeline.jsx'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import AskVideo from '../components/AskVideo.jsx'
 import Player from '../components/Player.jsx'
-import { ArrowLeft, ArrowUpRight, Check, Copy, Link as LinkIcon, Retry, Search, Trash, Youtube } from '../components/Icons.jsx'
+import { UploadCover } from '../components/VideoCard.jsx'
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  Check,
+  Copy,
+  Download,
+  FileVideo,
+  Link as LinkIcon,
+  Retry,
+  Search,
+  Trash,
+  Youtube,
+} from '../components/Icons.jsx'
 import useJob from '../hooks/useJob.js'
 import { analyzeVideo, getVideo, youtubeUrl } from '../services/api.js'
 import { deleteEntries, getEntry, saveEntry } from '../services/library.js'
@@ -18,7 +32,8 @@ const TABS = [
   { key: 'transcript', label: 'Transcript' },
 ]
 const ACTIVE = new Set(['queued', 'processing'])
-const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/
+const YOUTUBE_ID = /^[A-Za-z0-9_-]{11}$/
+const UPLOAD_ID = /^up_[0-9a-f]{24}$/
 
 const LANGUAGE_NAMES = typeof Intl.DisplayNames === 'function' ? new Intl.DisplayNames(['en'], { type: 'language' }) : null
 function languageName(code) {
@@ -66,14 +81,45 @@ function highlightMatch(text, query) {
 }
 
 function briefAsMarkdown(video, result) {
-  const lines = [`# ${video.title || 'Video brief'}`, '', video.url, '']
+  const lines = [`# ${video.title || 'Video brief'}`, '']
+  if (video.url) lines.push(video.url, '')
   if (result.tldr) lines.push(`> ${result.tldr}`, '')
   lines.push('## Summary', '', result.summary, '')
   if (result.key_points.length) lines.push('## Key points', '', ...result.key_points.map((p) => `- ${p}`), '')
-  if (result.chapters.length) {
-    lines.push('## Chapters', '', ...result.chapters.map((c) => `- ${formatTimestamp(c.start)} ${c.title}`))
-  }
+  if (result.chapters.length) lines.push('## Chapters', '', ...result.chapters.map((c) => `- ${formatTimestamp(c.start)} ${c.title}`))
   return lines.join('\n')
+}
+
+/** Proportional chapter bar with a live playhead. */
+function ChapterTimeline({ chapters, duration, currentTime, onSeek }) {
+  if (!chapters.length || !duration) return null
+  const playhead = Math.min(100, (currentTime / duration) * 100)
+  return (
+    <div className="relative">
+      <div className="flex h-2.5 gap-[3px]">
+        {chapters.map((chapter, idx) => {
+          const width = ((chapter.end - chapter.start) / duration) * 100
+          const watched = currentTime >= chapter.end ? 100 : currentTime > chapter.start ? ((currentTime - chapter.start) / (chapter.end - chapter.start)) * 100 : 0
+          return (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => onSeek(chapter.start)}
+              title={`${formatTimestamp(chapter.start)} · ${chapter.title}`}
+              style={{ width: `${Math.max(width, 1)}%` }}
+              className="group relative h-full overflow-hidden rounded-full bg-white/[0.08] transition hover:scale-y-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            >
+              <span className="absolute inset-y-0 left-0 bg-gradient-to-r from-accent-strong to-accent" style={{ width: `${watched}%` }} />
+            </button>
+          )
+        })}
+      </div>
+      <span
+        className="pointer-events-none absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-accent shadow-glow transition-[left] duration-300"
+        style={{ left: `${playhead}%` }}
+      />
+    </div>
+  )
 }
 
 function Skeleton({ lines = 5 }) {
@@ -101,17 +147,20 @@ export default function VideoDetails() {
   const [confirmingRemove, setConfirmingRemove] = useState(false)
   const [retrying, setRetrying] = useState(false)
   const [copied, setCopied] = useState(null) // 'brief' | 'link'
+  const [exporting, setExporting] = useState(false)
 
-  // 1. This browser's library → 2. the server's cache → 3. start a new analysis
-  //    (that's how a shared link opens for someone who never saw the video).
+  const isUploadId = UPLOAD_ID.test(videoId)
+
+  // 1. This browser's library → 2. the server's cache → 3. (YouTube only) start
+  //    a new analysis — that's how a shared link opens for someone new.
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setLoadError(null)
     setPolling(false)
     ;(async () => {
-      if (!VIDEO_ID_RE.test(videoId)) {
-        setLoadError("That doesn't look like a YouTube video link.")
+      if (!YOUTUBE_ID.test(videoId) && !isUploadId) {
+        setLoadError("That doesn't look like a VidMind video link.")
         setLoading(false)
         return
       }
@@ -128,6 +177,13 @@ export default function VideoDetails() {
           job = await getVideo(videoId)
         } catch (err) {
           if (err.status !== 404) throw err
+          if (isUploadId) {
+            throw new Error(
+              local
+                ? 'This upload is no longer on the server. Upload the file again to get its brief.'
+                : "This upload's brief isn't available anymore. Upload the file again to get a new one."
+            )
+          }
           job = await analyzeVideo(youtubeUrl(videoId))
           window.dispatchEvent(new Event(USAGE_CHANGED))
         }
@@ -145,7 +201,7 @@ export default function VideoDetails() {
     return () => {
       cancelled = true
     }
-  }, [videoId])
+  }, [videoId, isUploadId])
 
   const { job, error: pollError } = useJob(videoId, { active: polling })
   useEffect(() => {
@@ -156,8 +212,11 @@ export default function VideoDetails() {
 
   const status = entry?.status
   const video = entry?.video
+  const source = video?.source || (isUploadId ? 'upload' : 'youtube')
+  const isUpload = source === 'upload'
   const result = status === 'completed' ? entry?.result : null
   const chapters = result?.chapters || []
+  const duration = video?.duration || chapters[chapters.length - 1]?.end || 0
 
   const paragraphs = useMemo(() => (result ? buildParagraphs(result.segments) : []), [result])
   const visibleParagraphs = useMemo(() => {
@@ -182,6 +241,10 @@ export default function VideoDetails() {
   const handleTimeUpdate = useCallback((t) => setCurrentTime(t), [])
 
   const handleRetry = async () => {
+    if (isUpload) {
+      navigate('/')
+      return
+    }
     setRetrying(true)
     try {
       const fresh = await analyzeVideo(video?.url || youtubeUrl(videoId))
@@ -197,7 +260,7 @@ export default function VideoDetails() {
     }
   }
 
-  /** The server lost this video (e.g. after a redeploy): analyze it again, then resolve. */
+  /** The server lost this YouTube video (e.g. after a redeploy): analyze it again, then resolve. */
   const restoreOnServer = useCallback(async () => {
     await analyzeVideo(video?.url || youtubeUrl(videoId))
     for (let i = 0; i < 60; i += 1) {
@@ -220,14 +283,25 @@ export default function VideoDetails() {
     }
   }
 
+  const exportPdf = async () => {
+    setExporting(true)
+    try {
+      const { exportBriefPdf } = await import('../services/pdf.js')
+      await exportBriefPdf({ video, result })
+    } finally {
+      setExporting(false)
+    }
+  }
+
   if (loadError) {
     return (
-      <div className="grain min-h-screen">
+      <div className="grain relative min-h-screen">
+        <Background />
         <AppHeader />
-        <div className="mx-auto max-w-xl px-5 py-24 text-center">
-          <p className="font-display text-3xl text-neutral-100">Couldn't open this video</p>
-          <p className="mt-2 text-sm leading-relaxed text-neutral-500">{loadError}</p>
-          <Link to="/" className="btn-ghost mt-8">
+        <div className="mx-auto max-w-xl px-5 py-28 text-center">
+          <p className="font-display text-4xl text-neutral-100">Couldn't open this video</p>
+          <p className="mt-3 text-sm leading-relaxed text-neutral-500">{loadError}</p>
+          <Link to="/" className="btn-primary mt-8">
             <ArrowLeft /> Back to VidMind
           </Link>
         </div>
@@ -237,11 +311,12 @@ export default function VideoDetails() {
 
   if (loading || !entry) {
     return (
-      <div className="grain min-h-screen">
+      <div className="grain relative min-h-screen">
+        <Background />
         <AppHeader />
         <div className="mx-auto max-w-6xl space-y-4 px-5 py-12 sm:px-8">
           <div className="skeleton h-4 w-24" />
-          <div className="skeleton h-10 w-2/3" />
+          <div className="skeleton h-12 w-2/3" />
           <div className="skeleton mt-8 aspect-video w-full max-w-3xl rounded-3xl" />
         </div>
       </div>
@@ -249,96 +324,113 @@ export default function VideoDetails() {
   }
 
   const meta = [formatDuration(video?.duration), languageName(result?.language)].filter(Boolean)
+  const tabIndex = TABS.findIndex((t) => t.key === tab)
 
   return (
-    <div className="grain min-h-screen">
+    <div className="grain relative min-h-screen">
+      <Background />
       <AppHeader>
-        {status === 'completed' && (
-          <button type="button" onClick={() => copy('link')} className="btn-quiet">
-            {copied === 'link' ? <Check className="h-3.5 w-3.5" /> : <LinkIcon className="h-3.5 w-3.5" />}
-            <span className="hidden sm:inline">{copied === 'link' ? 'Link copied' : 'Share'}</span>
-          </button>
-        )}
-        {video?.url && (
-          <a href={video.url} target="_blank" rel="noopener noreferrer" className="btn-quiet">
-            <span className="hidden sm:inline">YouTube</span>
-            <ArrowUpRight className="h-3.5 w-3.5" />
-          </a>
-        )}
         <button
           type="button"
           onClick={() => setConfirmingRemove(true)}
           className="btn-quiet hover:text-rose-300"
           aria-label="Remove from library"
+          title="Remove from library"
         >
           <Trash className="h-3.5 w-3.5" />
         </button>
       </AppHeader>
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-[28rem] bg-[radial-gradient(ellipse_at_30%_0%,rgba(139,108,255,0.14),transparent_60%)]" />
+      {/* Ambient backdrop from the video itself */}
+      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 -z-[5] h-[34rem] overflow-hidden opacity-40">
+        {isUpload ? (
+          <UploadCover id={videoId} className="scale-125 blur-3xl" />
+        ) : (
+          video?.thumbnail && <img src={video.thumbnail} alt="" className="h-full w-full scale-125 object-cover blur-3xl" />
+        )}
+        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-ink-950/60 to-ink-950" />
+      </div>
 
-      <main className="relative mx-auto max-w-6xl px-5 pb-24 pt-8 sm:px-8 sm:pt-10">
-        <Link to="/" className="inline-flex items-center gap-1.5 text-xs text-neutral-500 transition hover:text-neutral-200">
+      <main className="relative mx-auto max-w-6xl px-5 pb-28 pt-8 sm:px-8 sm:pt-10">
+        <Link to="/" className="inline-flex items-center gap-1.5 text-xs text-neutral-400 transition hover:text-white">
           <ArrowLeft className="h-3.5 w-3.5" /> Library
         </Link>
 
-        <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="mt-6 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div className="min-w-0 animate-fade-up">
-            <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-              <Youtube className="h-3.5 w-3.5" />
-              <span>YouTube</span>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-400">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 backdrop-blur">
+                {isUpload ? <FileVideo className="h-3.5 w-3.5" /> : <Youtube className="h-3.5 w-3.5" />}
+                {isUpload ? 'Uploaded video' : 'YouTube'}
+              </span>
               {meta.map((m) => (
-                <span key={m} className="flex items-center gap-2">
-                  <span className="text-neutral-700">·</span>
+                <span key={m} className="rounded-full border border-white/[0.06] px-2.5 py-1">
                   {m}
                 </span>
               ))}
+              <StatusBadge status={status} />
             </div>
-            <h1 className="mt-3 max-w-4xl font-display text-4xl leading-[1.05] tracking-tight text-neutral-50 sm:text-5xl">
-              {video?.title || 'YouTube video'}
+            <h1 className="mt-4 max-w-4xl font-display text-4xl leading-[1.02] tracking-tight text-neutral-50 sm:text-6xl">
+              {video?.title || (isUpload ? 'Uploaded video' : 'YouTube video')}
             </h1>
           </div>
-          <StatusBadge status={status} className="self-start" />
+
+          {result && (
+            <div className="flex shrink-0 flex-wrap items-center gap-2 animate-fade-up" style={{ animationDelay: '80ms' }}>
+              <button type="button" onClick={exportPdf} disabled={exporting} className="btn-primary">
+                <Download /> {exporting ? 'Preparing…' : 'Export PDF'}
+              </button>
+              <button type="button" onClick={() => copy('link')} className="btn-ghost">
+                {copied === 'link' ? <Check /> : <LinkIcon />}
+                {copied === 'link' ? 'Copied' : 'Share'}
+              </button>
+              {video?.url && (
+                <a href={video.url} target="_blank" rel="noopener noreferrer" className="btn-ghost" aria-label="Open on YouTube">
+                  <ArrowUpRight />
+                </a>
+              )}
+            </div>
+          )}
         </div>
 
         {ACTIVE.has(status) && (
-          <div className="mt-10 max-w-3xl animate-fade-up">
-            <ProcessingTimeline progress={entry.progress ?? 5} stage={entry.stage} />
+          <div className="mt-12 max-w-4xl animate-fade-up">
+            <ProcessingTimeline progress={entry.progress ?? 5} stage={entry.stage} source={source} />
             {pollError && <p className="mt-3 text-sm text-rose-300">{pollError}</p>}
-            <p className="mt-4 text-[13px] leading-relaxed text-neutral-500">
-              Usually about 30 seconds. You can leave this page; the video will be waiting in your library.
-            </p>
           </div>
         )}
 
         {status === 'failed' && (
-          <div className="card mt-10 max-w-3xl animate-fade-up border-rose-400/20 p-7">
-            <p className="font-display text-2xl text-neutral-100">Couldn't summarize this video</p>
-            <p className="mt-2 text-sm leading-relaxed text-neutral-400">
-              {entry.error || 'Something went wrong while analyzing this video.'}
-            </p>
+          <div className="card mt-12 max-w-3xl animate-fade-up border-rose-400/20 p-8">
+            <p className="font-display text-3xl text-neutral-100">Couldn't summarize this video</p>
+            <p className="mt-2 text-sm leading-relaxed text-neutral-400">{entry.error || 'Something went wrong while analyzing this video.'}</p>
             <button type="button" onClick={handleRetry} disabled={retrying} className="btn-primary mt-6">
-              <Retry /> {retrying ? 'Retrying…' : 'Try again'}
+              <Retry /> {isUpload ? 'Upload again' : retrying ? 'Retrying…' : 'Try again'}
             </button>
           </div>
         )}
 
         {result && (
-          <div className="mt-10 grid grid-cols-1 gap-8 lg:grid-cols-12">
-            {/* Left: player + chapters */}
+          <div className="mt-12 grid grid-cols-1 gap-8 lg:grid-cols-12">
+            {/* Left: player, chapter timeline, chapters */}
             <div className="lg:col-span-7">
               <div className="space-y-6 lg:sticky lg:top-24">
-                <div className="overflow-hidden rounded-3xl border border-white/[0.08] bg-black shadow-card">
-                  <Player ref={playerRef} videoId={videoId} title={video?.title} onTimeUpdate={handleTimeUpdate} />
+                <div className="glow-border rounded-[1.75rem]">
+                  <div className="overflow-hidden rounded-[1.75rem] bg-black">
+                    <Player ref={playerRef} videoId={videoId} source={source} title={video?.title} onTimeUpdate={handleTimeUpdate} />
+                  </div>
                 </div>
 
                 {chapters.length > 0 && (
                   <section className="card p-5 sm:p-6">
-                    <div className="mb-3 flex items-center justify-between">
+                    <div className="mb-4 flex items-center justify-between">
                       <h2 className="eyebrow">Chapters</h2>
-                      <span className="font-mono text-[11px] text-neutral-600">{chapters.length}</span>
+                      <span className="font-mono text-[11px] text-neutral-500">
+                        {formatTimestamp(currentTime)} / {formatTimestamp(duration)}
+                      </span>
                     </div>
-                    <ol className="max-h-[22rem] space-y-0.5 overflow-y-auto pr-1">
+                    <ChapterTimeline chapters={chapters} duration={duration} currentTime={currentTime} onSeek={seekTo} />
+                    <ol className="mt-5 max-h-[22rem] space-y-0.5 overflow-y-auto pr-1">
                       {chapters.map((chapter, idx) => {
                         const active = idx === activeChapterIndex
                         return (
@@ -348,20 +440,16 @@ export default function VideoDetails() {
                               onClick={() => seekTo(chapter.start)}
                               aria-current={active ? 'true' : undefined}
                               className={`group flex w-full gap-4 rounded-2xl px-3 py-2.5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 ${
-                                active ? 'bg-accent/[0.09]' : 'hover:bg-white/[0.04]'
+                                active ? 'bg-accent/[0.1] shadow-[inset_0_0_0_1px_rgba(185,166,255,0.2)]' : 'hover:bg-white/[0.04]'
                               }`}
                             >
                               <span className={`timestamp w-12 shrink-0 pt-px ${active ? '' : 'text-neutral-500 group-hover:text-accent/90'}`}>
                                 {formatTimestamp(chapter.start)}
                               </span>
                               <span className="min-w-0">
-                                <span className={`block text-sm font-medium ${active ? 'text-white' : 'text-neutral-200'}`}>
-                                  {chapter.title}
-                                </span>
+                                <span className={`block text-sm font-medium ${active ? 'text-white' : 'text-neutral-200'}`}>{chapter.title}</span>
                                 {chapter.summary && (
-                                  <span className="mt-0.5 line-clamp-2 block text-[13px] leading-relaxed text-neutral-500">
-                                    {chapter.summary}
-                                  </span>
+                                  <span className="mt-0.5 line-clamp-2 block text-[13px] leading-relaxed text-neutral-500">{chapter.summary}</span>
                                 )}
                               </span>
                             </button>
@@ -376,7 +464,12 @@ export default function VideoDetails() {
 
             {/* Right: tabs */}
             <div className="lg:col-span-5">
-              <div role="tablist" aria-label="Video insights" className="mb-5 inline-flex rounded-full border border-white/[0.08] bg-white/[0.02] p-1">
+              <div role="tablist" aria-label="Video insights" className="relative mb-6 grid grid-cols-3 rounded-full border border-white/[0.08] bg-white/[0.03] p-1 backdrop-blur">
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-y-1 left-1 rounded-full bg-white shadow-[0_6px_20px_-6px_rgba(255,255,255,0.45)] transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                  style={{ width: 'calc((100% - 0.5rem) / 3)', transform: `translateX(${tabIndex * 100}%)` }}
+                />
                 {TABS.map((t) => (
                   <button
                     key={t.key}
@@ -384,8 +477,8 @@ export default function VideoDetails() {
                     type="button"
                     aria-selected={tab === t.key}
                     onClick={() => setTab(t.key)}
-                    className={`rounded-full px-4 py-1.5 text-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 ${
-                      tab === t.key ? 'bg-white text-ink-950' : 'text-neutral-400 hover:text-neutral-100'
+                    className={`relative z-10 rounded-full py-2 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 ${
+                      tab === t.key ? 'text-ink-950' : 'text-neutral-400 hover:text-neutral-100'
                     }`}
                   >
                     {t.label}
@@ -394,28 +487,33 @@ export default function VideoDetails() {
               </div>
 
               {tab === 'brief' && (
-                <div role="tabpanel" className="animate-fade-up space-y-8">
+                <div role="tabpanel" className="animate-fade-up space-y-10">
                   {result.tldr && (
-                    <div className="relative overflow-hidden rounded-3xl border border-gold/20 bg-gradient-to-br from-gold/[0.08] to-transparent p-6">
-                      <p className="eyebrow text-gold/80">TL;DR</p>
-                      <p className="mt-2 font-display text-[1.6rem] leading-snug text-neutral-50">{result.tldr}</p>
+                    <div className="glow-border rounded-[1.75rem]">
+                      <div className="relative overflow-hidden rounded-[1.75rem] bg-gradient-to-br from-ink-800 to-ink-900 p-7">
+                        <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-gold/15 blur-3xl" />
+                        <p className="eyebrow text-gold/80">TL;DR</p>
+                        <p className="mt-3 font-display text-[1.75rem] leading-snug text-neutral-50">{result.tldr}</p>
+                      </div>
                     </div>
                   )}
 
                   <section>
-                    <div className="mb-3 flex items-center justify-between">
+                    <div className="mb-4 flex items-center justify-between">
                       <h2 className="eyebrow">Summary</h2>
                       <button type="button" onClick={() => copy('brief')} className="btn-quiet text-xs">
                         {copied === 'brief' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                        {copied === 'brief' ? 'Copied' : 'Copy brief'}
+                        {copied === 'brief' ? 'Copied' : 'Copy as text'}
                       </button>
                     </div>
-                    <div className="space-y-4 text-[15px] leading-[1.75] text-neutral-300">
+                    <div className="space-y-4 text-[15px] leading-[1.8] text-neutral-300">
                       {result.summary
                         .split(/\n\s*\n/)
                         .filter(Boolean)
                         .map((para, i) => (
-                          <p key={i}>{para}</p>
+                          <p key={i} className={i === 0 ? 'text-[16px] text-neutral-200' : ''}>
+                            {para}
+                          </p>
                         ))}
                     </div>
                   </section>
@@ -425,20 +523,29 @@ export default function VideoDetails() {
                       <h2 className="eyebrow mb-4">Key points</h2>
                       <ol className="space-y-3">
                         {result.key_points.map((point, idx) => (
-                          <li key={idx} className="flex gap-4 rounded-2xl border border-white/[0.06] bg-white/[0.015] p-4">
-                            <span className="font-mono text-xs leading-6 text-accent">{String(idx + 1).padStart(2, '0')}</span>
+                          <li
+                            key={idx}
+                            className="group flex gap-4 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4 transition hover:border-accent/25 hover:bg-accent/[0.04]"
+                          >
+                            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-accent-strong/40 to-aqua/20 font-mono text-[11px] text-white">
+                              {String(idx + 1).padStart(2, '0')}
+                            </span>
                             <span className="text-sm leading-relaxed text-neutral-200">{point}</span>
                           </li>
                         ))}
                       </ol>
                     </section>
                   )}
+
+                  <button type="button" onClick={exportPdf} disabled={exporting} className="btn-ghost w-full py-3">
+                    <Download /> {exporting ? 'Preparing PDF…' : 'Download this brief as a PDF'}
+                  </button>
                 </div>
               )}
 
               {tab === 'ask' && (
                 <div role="tabpanel" className="animate-fade-up">
-                  <AskVideo videoId={videoId} chapters={chapters} onSeek={seekTo} onRestore={restoreOnServer} />
+                  <AskVideo videoId={videoId} chapters={chapters} onSeek={seekTo} onRestore={isUpload ? undefined : restoreOnServer} />
                 </div>
               )}
 
@@ -491,7 +598,7 @@ export default function VideoDetails() {
       {confirmingRemove && (
         <ConfirmDialog
           title="Remove from your library?"
-          description="It's only removed from this browser. You can open or analyze the video again any time."
+          description="It's only removed from this browser."
           confirmLabel="Remove"
           onCancel={() => setConfirmingRemove(false)}
           onConfirm={async () => {

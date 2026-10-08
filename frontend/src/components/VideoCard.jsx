@@ -4,13 +4,39 @@ import StatusBadge from './StatusBadge.jsx'
 import ProgressBar from './ProgressBar.jsx'
 import ConfirmDialog from './ConfirmDialog.jsx'
 import { USAGE_CHANGED } from './AppHeader.jsx'
-import { Check, Retry, Trash, Youtube } from './Icons.jsx'
+import { Check, FileVideo, Retry, Trash, Youtube } from './Icons.jsx'
 import useJob from '../hooks/useJob.js'
+import useSpotlight from '../hooks/useSpotlight.js'
 import { analyzeVideo } from '../services/api.js'
 import { saveEntry } from '../services/library.js'
 import { formatRelativeDate, formatTimestamp } from '../utils/format.js'
 
 const ACTIVE = new Set(['queued', 'processing'])
+
+/** Deterministic gradient "cover art" for uploads, from the upload's ID. */
+export function UploadCover({ id, title, className = '' }) {
+  let hash = 0
+  for (const ch of id || '') hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
+  const hue = hash % 360
+  const hue2 = (hue + 50 + (hash % 70)) % 360
+  const bars = Array.from({ length: 28 }, (_, i) => 20 + (((hash >> (i % 24)) + i * 37) % 70))
+  return (
+    <div
+      className={`relative flex h-full w-full items-end overflow-hidden ${className}`}
+      style={{
+        background: `radial-gradient(circle at 20% 15%, hsla(${hue}, 85%, 65%, 0.55), transparent 55%), radial-gradient(circle at 85% 90%, hsla(${hue2}, 85%, 60%, 0.45), transparent 50%), #0c0b16`,
+      }}
+    >
+      <div className="absolute inset-x-5 bottom-5 flex h-16 items-end gap-[3px] opacity-70">
+        {bars.map((h, i) => (
+          <span key={i} className="flex-1 rounded-full bg-white/70" style={{ height: `${h}%` }} />
+        ))}
+      </div>
+      <FileVideo className="absolute right-4 top-4 h-5 w-5 text-white/60" />
+      <span className="sr-only">{title}</span>
+    </div>
+  )
+}
 
 export default function VideoCard({ entry, onDelete, index = 0, selecting = false, selected = false, onToggleSelect }) {
   const [restarted, setRestarted] = useState(false)
@@ -25,12 +51,20 @@ export default function VideoCard({ entry, onDelete, index = 0, selecting = fals
   const [retryError, setRetryError] = useState(null)
 
   const { video } = entry
-  const title = video?.title || 'YouTube video'
+  const isUpload = video?.source === 'upload'
+  const title = video?.title || (isUpload ? 'Uploaded video' : 'YouTube video')
+  const spotlight = useSpotlight()
   const href = `/videos/${entry.id}`
 
   const handleRetry = async () => {
     setRetrying(true)
     setRetryError(null)
+    if (isUpload) {
+      // The file isn't kept on the server, so an upload is retried by uploading it again.
+      setRetryError('Upload the file again to retry.')
+      setRetrying(false)
+      return
+    }
     try {
       const fresh = await analyzeVideo(video.url)
       await saveEntry({ id: fresh.id, video: fresh.video, status: fresh.status, error: fresh.error })
@@ -45,7 +79,8 @@ export default function VideoCard({ entry, onDelete, index = 0, selecting = fals
 
   return (
     <article
-      className={`card card-hover group relative flex animate-fade-up flex-col overflow-hidden ${
+      onMouseMove={spotlight}
+      className={`card card-hover spotlight group relative flex animate-fade-up flex-col overflow-hidden hover:shadow-glow-lg ${
         selected ? 'border-accent/60 ring-2 ring-accent/40' : ''
       }`}
       style={{ animationDelay: `${Math.min(index, 8) * 50}ms` }}
@@ -75,13 +110,17 @@ export default function VideoCard({ entry, onDelete, index = 0, selecting = fals
         aria-hidden="true"
         className="relative block aspect-video overflow-hidden border-b border-white/[0.06] bg-ink-850"
       >
-        {video?.thumbnail && (
-          <img
-            src={video.thumbnail}
-            alt=""
-            loading="lazy"
-            className="h-full w-full object-cover transition duration-700 group-hover:scale-[1.03]"
-          />
+        {isUpload ? (
+          <UploadCover id={entry.id} title={title} className="transition duration-700 group-hover:scale-[1.04]" />
+        ) : (
+          video?.thumbnail && (
+            <img
+              src={video.thumbnail}
+              alt=""
+              loading="lazy"
+              className="h-full w-full object-cover transition duration-700 group-hover:scale-[1.04]"
+            />
+          )
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-ink-950/80 via-transparent to-transparent" />
         <StatusBadge status={status} className="absolute left-3 top-3" />
@@ -94,8 +133,8 @@ export default function VideoCard({ entry, onDelete, index = 0, selecting = fals
 
       <div className="flex flex-1 flex-col p-5">
         <div className="flex items-center gap-2 text-[11px] text-neutral-500">
-          <Youtube className="h-3.5 w-3.5" />
-          <span>YouTube</span>
+          {isUpload ? <FileVideo className="h-3.5 w-3.5" /> : <Youtube className="h-3.5 w-3.5" />}
+          <span>{isUpload ? 'Upload' : 'YouTube'}</span>
           <span className="text-neutral-700">·</span>
           <span>{formatRelativeDate(entry.savedAt)}</span>
         </div>
@@ -145,7 +184,11 @@ export default function VideoCard({ entry, onDelete, index = 0, selecting = fals
       {confirmingDelete && (
         <ConfirmDialog
           title="Remove from your library?"
-          description="It's only removed from this browser. You can analyze the video again any time."
+          description={
+            isUpload
+              ? "It's only removed from this browser. To get the brief again, upload the file again."
+              : "It's only removed from this browser. You can analyze the video again any time."
+          }
           confirmLabel="Remove"
           onCancel={() => setConfirmingDelete(false)}
           onConfirm={() => {

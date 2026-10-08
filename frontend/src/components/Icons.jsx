@@ -97,3 +97,25 @@ export const Chat = (p) => (
     <path d="M5 18l-1.5 3L8 19.5A8.5 8.5 0 1 0 5 18z" />
   </Icon>
 )
+export const Upload = (p) => (
+  <Icon {...p}>
+    <path d="M12 16V4M6 10l6-6 6 6M4 20h16" />
+  </Icon>
+)
+export const Download = (p) => (
+  <Icon {...p}>
+    <path d="M12 4v12M6 10l6 6 6-6M4 20h16" />
+  </Icon>
+)
+export const FileVideo = (p) => (
+  <Icon {...p}>
+    <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+    <path d="M14 3v5h5" />
+    <path d="M10 11.5v5l4-2.5z" fill="currentColor" stroke="none" />
+  </Icon>
+)
+export const Wave = (p) => (
+  <Icon {...p}>
+    <path d="M3 12h2M7 8v8M11 5v14M15 9v6M19 7v10M21 12h0" />
+  </Icon>
+)

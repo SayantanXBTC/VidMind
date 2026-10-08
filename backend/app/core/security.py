@@ -133,7 +133,8 @@ class BodySizeLimitMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
+        if scope["type"] != "http" or scope["path"] == "/api/upload":
+            # The upload route streams the file and enforces MAX_UPLOAD_MB itself.
             await self.app(scope, receive, send)
             return
 

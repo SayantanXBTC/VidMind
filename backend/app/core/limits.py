@@ -89,4 +89,6 @@ def usage_for(ip: str) -> dict:
         "analyses_today": _analyses.count(ip, DAY),
         "analyses_per_day": settings.ANALYSES_PER_IP_PER_DAY or None,
         "max_video_minutes": settings.MAX_VIDEO_MINUTES or None,
+        "uploads_enabled": settings.ENABLE_UPLOADS,
+        "max_upload_mb": settings.MAX_UPLOAD_MB or None,
     }

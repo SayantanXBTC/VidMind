@@ -394,3 +394,106 @@ def test_llm_output_is_cleaned_and_bounded():
     assert all(0 <= c["start"] <= 150 for c in out["chapters"])
     assert len(out["key_points"]) <= 10
     assert out["key_points"][0] == "First point here"
+
+
+# --------------------------------------------------------------------------
+# File uploads
+# --------------------------------------------------------------------------
+
+from app.services import transcription  # noqa: E402
+
+
+def upload(client, name="talk.mp4", content=b"fake video bytes", headers=None):
+    return client.post("/api/upload", files={"file": (name, content, "video/mp4")}, headers=headers or {})
+
+
+@contextmanager
+def fake_upload_pipeline(duration=120.0, segments=SEGMENTS):
+    llm = MagicMock(is_available=MagicMock(return_value=True), name="llm")
+    with patch.object(transcription, "probe", return_value={"duration": duration}), \
+         patch.object(transcription, "extract_audio", side_effect=lambda p: p.with_suffix(".wav")), \
+         patch.object(transcription.whisper, "transcribe", return_value=(segments, "en")) as whisper, \
+         patch.object(jobs_module, "summarize_with_llm", return_value=NOTES), \
+         patch.object(jobs_module, "llm_service", llm):
+        yield whisper
+
+
+def test_upload_happy_path_and_cleanup(client):
+    with fake_upload_pipeline():
+        r = upload(client, name="My_Lecture.mp4")
+        assert r.status_code == 202
+        vid = r.json()["id"]
+        assert vid.startswith("up_") and r.json()["video"]["source"] == "upload"
+        assert r.json()["video"]["title"] == "My Lecture"
+        done = wait_for(client, vid)
+    assert done["status"] == "completed" and done["result"]["tldr"] == NOTES["tldr"]
+    assert list(settings.UPLOAD_TMP_DIR.glob("*")) == []  # nothing left on disk
+
+
+def test_same_file_twice_is_free(client):
+    with fake_upload_pipeline() as whisper:
+        first = upload(client, content=b"identical bytes", headers=ip("198.51.100.20")).json()["id"]
+        wait_for(client, first)
+        second = upload(client, content=b"identical bytes", headers=ip("198.51.100.20"))
+        assert second.json()["id"] == first and second.json()["status"] == "completed"
+        assert whisper.call_count == 1
+    assert client.get("/api/usage", headers=ip("198.51.100.20")).json()["analyses_today"] == 1
+
+
+@pytest.mark.parametrize("name", ["virus.exe", "page.html", "notes.txt", "noextension", "../../etc/passwd"])
+def test_upload_rejects_non_video_names(client, name):
+    assert upload(client, name=name).status_code == 400
+
+
+def test_upload_rejects_non_video_content(client):
+    # Real ffprobe on garbage bytes behind an .mp4 name.
+    r = upload(client, name="movie.mp4", content=b"this is definitely not a video")
+    assert r.status_code == 400
+    assert "playable video" in r.json()["detail"]
+    assert list(settings.UPLOAD_TMP_DIR.glob("*")) == []
+
+
+def test_upload_size_limit(client, monkeypatch):
+    monkeypatch.setattr(settings, "MAX_UPLOAD_MB", 1)
+    r = upload(client, content=b"x" * (1024 * 1024 + 10))
+    assert r.status_code == 413
+    assert list(settings.UPLOAD_TMP_DIR.glob("*")) == []
+
+
+def test_upload_empty_file(client):
+    assert upload(client, content=b"").status_code == 400
+
+
+def test_upload_too_long(client):
+    with fake_upload_pipeline(duration=(settings.MAX_VIDEO_MINUTES + 5) * 60.0):
+        r = upload(client)
+    assert r.status_code == 400 and "minutes" in r.json()["detail"]
+    assert list(settings.UPLOAD_TMP_DIR.glob("*")) == []
+
+
+def test_upload_counts_toward_daily_limit(client):
+    with fake_upload_pipeline():
+        codes = []
+        for i in range(settings.ANALYSES_PER_IP_PER_DAY + 1):
+            r = upload(client, content=f"video {i}".encode(), headers=ip("203.0.113.40"))
+            codes.append(r.status_code)
+            if r.status_code == 202:
+                wait_for(client, r.json()["id"])
+    assert codes[-1] == 429 and codes[:-1] == [202] * settings.ANALYSES_PER_IP_PER_DAY
+
+
+def test_silent_video_fails_cleanly(client):
+    with fake_upload_pipeline(segments=[]):
+        vid = upload(client).json()["id"]
+        data = wait_for(client, vid)
+    assert data["status"] == "failed" and "speech" in data["error"]
+
+
+def test_uploads_can_be_disabled(client, monkeypatch):
+    monkeypatch.setattr(settings, "ENABLE_UPLOADS", False)
+    assert upload(client).status_code == 403
+
+
+def test_upload_ids_accepted_by_routes(client):
+    assert client.get("/api/videos/up_" + "a" * 24).status_code == 404  # valid format, unknown
+    assert client.get("/api/videos/up_" + "Z" * 24).status_code == 422  # not hex

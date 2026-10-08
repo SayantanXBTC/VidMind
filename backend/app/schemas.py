@@ -14,7 +14,8 @@ class AskRequest(BaseModel):
 
 class VideoInfo(BaseModel):
     id: str
-    url: str
+    source: str = "youtube"  # "youtube" or "upload"
+    url: Optional[str] = None
     title: Optional[str] = None
     duration: Optional[float] = None
     thumbnail: Optional[str] = None
@@ -68,6 +69,8 @@ class UsageResponse(BaseModel):
     analyses_today: int
     analyses_per_day: Optional[int] = None
     max_video_minutes: Optional[int] = None
+    uploads_enabled: bool = True
+    max_upload_mb: Optional[int] = None
 
 
 class HealthResponse(BaseModel):

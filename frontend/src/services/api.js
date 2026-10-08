@@ -51,4 +51,29 @@ export const askVideo = (videoId, question) =>
 
 export const getUsage = () => request('/api/usage')
 
+/** Upload a video file from the visitor's computer. onProgress(0–100) while sending. */
+export function uploadVideo(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData()
+    form.append('file', file)
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${API_URL}/api/upload`)
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100))
+    }
+    xhr.onload = () => {
+      let body = null
+      try {
+        body = JSON.parse(xhr.responseText)
+      } catch {
+        // no JSON body
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body)
+      else reject(new ApiError(typeof body?.detail === 'string' ? body.detail : `Upload failed (${xhr.status})`, xhr.status))
+    }
+    xhr.onerror = () => reject(new ApiError(NETWORK_ERROR, 0))
+    xhr.send(form)
+  })
+}
+
 export const youtubeUrl = (videoId) => `https://www.youtube.com/watch?v=${videoId}`
