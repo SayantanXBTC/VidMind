@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>VidMind</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="header">
+      <span class="wordmark">VIDMIND</span>
+      <button id="settings-toggle" class="icon-btn" aria-label="Settings" title="Settings">⚙</button>
+    </header>
+    <p class="tagline">Video intelligence</p>
+
+    <section id="settings" class="settings hidden">
+      <label for="backend-url">Backend URL</label>
+      <input id="backend-url" type="text" placeholder="http://localhost:8000" />
+      <label for="frontend-url">App URL</label>
+      <input id="frontend-url" type="text" placeholder="http://localhost:5173" />
+      <button id="settings-save" class="btn btn-secondary">Save</button>
+    </section>
+
+    <main id="content">
+      <p id="status-text" class="muted">Checking current tab…</p>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,15 @@
+fastapi==0.142.2
+uvicorn[standard]==0.54.0
+SQLAlchemy==2.1.1
+pydantic==2.13.5
+python-multipart==0.0.32
+python-dotenv==1.2.3
+faster-whisper==1.2.1
+transformers==5.17.0
+sentence-transformers==6.1.0
+faiss-cpu==1.15.1
+torch==2.14.0
+yt-dlp==2026.8.19
+anthropic==1.12.1
+pyjwt[crypto]==2.15.1
+psycopg[binary]==3.3.6
