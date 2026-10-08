@@ -11,7 +11,9 @@ load_dotenv(BASE_DIR / ".env")
 
 
 def _parse_origins(raw: str) -> list[str]:
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    # Browsers send origins without a trailing slash, so drop any that was
+    # pasted in ("https://app.vercel.app/" would otherwise match nothing).
+    return [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
 
 
 def _bool_env(name: str, default: bool) -> bool:
