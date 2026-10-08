@@ -86,7 +86,7 @@ The 58 tests need no network or API keys; YouTube, TranscriptAPI and the AI are 
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | Claude for summaries and Ask | empty (use Ollama) |
-| `ANTHROPIC_MODEL` | `claude-opus-5-5`, `claude-sonnet-5-5` or `claude-haiku-5-5` | `claude-opus-5-5` |
+| `ANTHROPIC_MODEL` | Claude model for every AI call: summaries, chapters and Ask | `claude-sonnet-5-5` |
 | `ANTHROPIC_EFFORT` | `low` / `medium` / `high` | `low` |
 | `TRANSCRIPT_API_KEY` | YouTube transcripts via TranscriptAPI.com (needed on servers) | empty (use yt-dlp) |
 | `ALLOWED_ORIGINS` | Frontend URLs allowed to call the API | localhost |

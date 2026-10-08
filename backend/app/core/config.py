@@ -34,7 +34,7 @@ class Settings:
     # (Claude when ANTHROPIC_API_KEY is set, otherwise Ollama).
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "auto").lower()
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-opus-5-5")
+    ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5")
     # low | medium | high | xhigh | max. Summaries don't need deep reasoning,
     # and lower effort is faster and cheaper.
     ANTHROPIC_EFFORT: str = os.getenv("ANTHROPIC_EFFORT", "low")
