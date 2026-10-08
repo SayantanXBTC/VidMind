@@ -1,9 +1,7 @@
-"""Test setup: an isolated SQLite database and temp dirs, sign-in enabled with
-a test HS256 secret, and no external services (TranscriptAPI, Claude,
-YouTube) — those are mocked per test.
+"""Test setup: temp cache dir, small limits, no external services.
 
-Settings are read at import time, so the environment is set before any
-`app` import.
+YouTube, TranscriptAPI and the LLM are mocked per test. Settings are read
+at import time, so the environment is set before any `app` import.
 """
 import os
 import tempfile
@@ -14,55 +12,67 @@ import pytest
 _TMP = tempfile.mkdtemp(prefix="vidmind-tests-")
 os.environ.update(
     {
-        "DATABASE_URL": f"sqlite:///{_TMP}/test.db",
-        "UPLOAD_DIR": f"{_TMP}/uploads",
-        "PROCESSED_DIR": f"{_TMP}/processed",
-        "SUPABASE_URL": "https://test-project.supabase.co",
-        "SUPABASE_JWT_SECRET": "test-secret-that-is-long-enough-for-hs256-signing",
+        "CACHE_DIR": _TMP,
         "LLM_PROVIDER": "none",
-        "TRANSCRIPT_API_KEY": "",
         "ANTHROPIC_API_KEY": "",
-        "JOB_MODE": "queue",  # nothing runs in the background during tests
-        "DAILY_VIDEO_LIMIT": "3",
-        "MAX_ACTIVE_JOBS_PER_USER": "10",
+        "TRANSCRIPT_API_KEY": "",
+        "ANALYSES_PER_IP_PER_DAY": "3",
+        "ANALYSES_PER_DAY_TOTAL": "6",
+        "QUESTIONS_PER_IP_PER_HOUR": "4",
         "MAX_VIDEO_MINUTES": "60",
-        "RATE_LIMIT_PER_MINUTE": "0",  # enabled only in the rate-limit test
+        "RATE_LIMIT_PER_MINUTE": "0",  # enabled only in the rate-limit tests
         "ALLOWED_ORIGINS": "https://app.example.com",
+        "FORCE_HTTPS": "true",
+        "ENABLE_DOCS": "false",
     }
 )
 
-import jwt  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.core.config import settings  # noqa: E402
+from app.core import limits  # noqa: E402
 from app.main import app  # noqa: E402
+from app.services import jobs as jobs_module  # noqa: E402
 
-ISSUER = f"{settings.SUPABASE_URL}/auth/v1"
+SEGMENTS = [
+    {"start": i * 5.0, "end": i * 5.0 + 5, "text": f"Sentence {i} about rockets, engines and launch pads."}
+    for i in range(40)
+]
 
-
-def make_token(sub="user-a", email="a@example.com", **overrides) -> str:
-    claims = {
-        "sub": sub,
-        "email": email,
-        "aud": "authenticated",
-        "iss": ISSUER,
-        "exp": int(time.time()) + 600,
-        **overrides,
-    }
-    return jwt.encode(claims, settings.SUPABASE_JWT_SECRET, algorithm="HS256")
-
-
-def auth(sub="user-a") -> dict:
-    return {"Authorization": f"Bearer {make_token(sub=sub, email=f'{sub}@example.com')}"}
-
-
-FAKE_METADATA = {
-    "video_id": "dQw4w9WgXcQ",
-    "canonical_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    "title": "Test video",
-    "duration": 600.0,
-    "thumbnail": None,
+NOTES = {
+    "tldr": "A video about rockets.",
+    "summary": "Rockets are explained.",
+    "key_points": ["Rockets need engines."],
+    "chapters": [{"title": "Intro", "start": 0.0, "end": 200.0, "summary": None}],
 }
+
+
+def metadata(video_id="dQw4w9WgXcQ", duration=600.0):
+    return {
+        "video_id": video_id,
+        "canonical_url": f"https://www.youtube.com/watch?v={video_id}",
+        "title": "Test video",
+        "duration": duration,
+        "thumbnail": None,
+    }
+
+
+def yt(video_id="dQw4w9WgXcQ") -> str:
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
+def ip(addr: str) -> dict:
+    """Pretend the request came from `addr` via the hosting proxy."""
+    return {"X-Forwarded-For": addr}
+
+
+def wait_for(client, video_id, timeout=5.0) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        data = client.get(f"/api/videos/{video_id}").json()
+        if data["status"] in ("completed", "failed"):
+            return data
+        time.sleep(0.02)
+    raise AssertionError(f"job {video_id} didn't finish")
 
 
 @pytest.fixture(scope="session")
@@ -72,13 +82,11 @@ def client():
 
 
 @pytest.fixture(autouse=True)
-def clean_db():
-    from app.database.session import SessionLocal, init_db
-    from app.models.video import Video
-
-    init_db()  # tables may not exist yet if no test has started the app
-    db = SessionLocal()
-    db.query(Video).delete()
-    db.commit()
-    db.close()
+def fresh_state():
+    """Each test starts with an empty cache and fresh limit counters."""
+    jobs_module.job_manager._jobs.clear()
+    for path in (jobs_module._RESULTS_DIR).glob("*.json"):
+        path.unlink()
+    limits._analyses = limits._Window()
+    limits._questions = limits._Window()
     yield

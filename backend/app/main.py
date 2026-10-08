@@ -1,14 +1,12 @@
-# Must run before any ML import — see app/core/native_threads.py.
-import app.core.native_threads  # noqa: F401,I001
-
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import account, health, videos
+from app.api.routes import health, videos
 from app.core.config import settings
 from app.core.logging_config import configure_logging
 from app.core.security import (
@@ -16,18 +14,29 @@ from app.core.security import (
     CatchAllMiddleware,
     HTTPSRedirectMiddleware,
     RateLimitMiddleware,
-    RedactTokensFilter,
     SecurityHeadersMiddleware,
 )
-from app.database.session import SessionLocal, init_db
-from app.models.video import Video, VideoStatus
+from app.services.llm_service import llm_service
 
 configure_logging()
-logging.getLogger("uvicorn.access").addFilter(RedactTokensFilter())
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    logger.info(
+        "VidMind backend started. ai=%s transcripts=%s limits: %s new videos/IP/day, %s/day total",
+        llm_service.name,
+        "transcriptapi" if settings.TRANSCRIPT_API_KEY else "yt-dlp",
+        settings.ANALYSES_PER_IP_PER_DAY or "unlimited",
+        settings.ANALYSES_PER_DAY_TOTAL or "unlimited",
+    )
+    yield
+
 
 app = FastAPI(
     title="VidMind API",
+    lifespan=lifespan,
     docs_url="/docs" if settings.ENABLE_DOCS else None,
     redoc_url=None,
     openapi_url="/openapi.json" if settings.ENABLE_DOCS else None,
@@ -43,10 +52,9 @@ app.add_middleware(RateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
-    # Auth uses a bearer token, not cookies, so credentials aren't needed.
     allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
     max_age=600,
 )
 app.add_middleware(SecurityHeadersMiddleware)
@@ -55,7 +63,7 @@ app.add_middleware(HTTPSRedirectMiddleware)
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
 
 
 @app.exception_handler(RequestValidationError)
@@ -70,43 +78,5 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=422, content={"detail": message})
 
 
-@app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
-
-
-def _fail_interrupted_jobs() -> None:
-    """Background jobs live in this process, so any video still marked
-    processing at startup was interrupted by a restart. Mark it failed so the
-    UI offers Retry instead of polling forever."""
-    db = SessionLocal()
-    try:
-        stuck = db.query(Video).filter(Video.status.in_([VideoStatus.PROCESSING, VideoStatus.UPLOADED])).all()
-        for video in stuck:
-            video.status = VideoStatus.FAILED
-            video.error_message = "Processing was interrupted by a server restart. Retry to run it again."
-        if stuck:
-            db.commit()
-            logger.warning("Marked %d interrupted video(s) as failed", len(stuck))
-    finally:
-        db.close()
-
-
-@app.on_event("startup")
-def on_startup() -> None:
-    init_db()
-    if settings.JOB_MODE == "inline":
-        # Queue mode leaves recovery to the worker (app/worker.py).
-        _fail_interrupted_jobs()
-    logger.info(
-        "VidMind backend started. auth=%s jobs=%s uploads=%s",
-        "supabase" if settings.AUTH_ENABLED else "off (local)",
-        settings.JOB_MODE,
-        settings.ENABLE_UPLOADS,
-    )
-
-
 app.include_router(health.router, prefix="/api")
 app.include_router(videos.router, prefix="/api")
-app.include_router(account.router, prefix="/api")

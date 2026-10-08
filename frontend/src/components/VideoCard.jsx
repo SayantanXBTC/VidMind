@@ -3,68 +3,45 @@ import { Link } from 'react-router-dom'
 import StatusBadge from './StatusBadge.jsx'
 import ProgressBar from './ProgressBar.jsx'
 import ConfirmDialog from './ConfirmDialog.jsx'
-import { Check, Film, Retry, Trash, Youtube } from './Icons.jsx'
-import useVideoStatus from '../hooks/useVideoStatus.js'
-import { retryVideo } from '../services/api.js'
-import { stageLabel } from '../utils/stage.js'
-import { formatFileSize, formatRelativeDate, formatTimestamp, videoTitle } from '../utils/format.js'
+import { USAGE_CHANGED } from './AppHeader.jsx'
+import { Check, Retry, Trash, Youtube } from './Icons.jsx'
+import useJob from '../hooks/useJob.js'
+import { analyzeVideo } from '../services/api.js'
+import { saveEntry } from '../services/library.js'
+import { formatRelativeDate, formatTimestamp } from '../utils/format.js'
 
-function Thumbnail({ video }) {
-  if (video.source_type === 'youtube' && video.source_thumbnail) {
-    return (
-      <img
-        src={video.source_thumbnail}
-        alt=""
-        loading="lazy"
-        className="h-full w-full object-cover transition duration-700 group-hover:scale-[1.03]"
-      />
-    )
-  }
-  return (
-    <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_30%_20%,rgba(139,108,255,0.28),transparent_55%),radial-gradient(circle_at_80%_90%,rgba(242,210,155,0.12),transparent_50%)]">
-      <Film className="h-8 w-8 text-white/30" strokeWidth={1.3} />
-    </div>
-  )
-}
+const ACTIVE = new Set(['queued', 'processing'])
 
-export default function VideoCard({
-  video,
-  onDelete,
-  onRetried,
-  index = 0,
-  selecting = false,
-  selected = false,
-  onToggleSelect,
-}) {
-  const [justRetried, setJustRetried] = useState(false)
-  const isActive = justRetried || video.status === 'processing' || video.status === 'uploaded'
-  const { status, progress } = useVideoStatus(video.id, {
-    active: isActive,
-    initialStatus: justRetried ? 'processing' : video.status,
-    initialProgress: justRetried ? 5 : video.processing_progress,
-  })
+export default function VideoCard({ entry, onDelete, index = 0, selecting = false, selected = false, onToggleSelect }) {
+  const [restarted, setRestarted] = useState(false)
+  const { job } = useJob(entry.id, { active: restarted || ACTIVE.has(entry.status) })
+  const status = job?.status ?? entry.status
+  const progress = job?.progress ?? 5
+  const stage = job?.stage ?? 'Queued'
+  const error = job?.error ?? entry.error
 
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [retrying, setRetrying] = useState(false)
   const [retryError, setRetryError] = useState(null)
 
+  const { video } = entry
+  const title = video?.title || 'YouTube video'
+  const href = `/videos/${entry.id}`
+
   const handleRetry = async () => {
     setRetrying(true)
     setRetryError(null)
     try {
-      await retryVideo(video.id)
-      setJustRetried(true)
-      onRetried?.(video.id)
+      const fresh = await analyzeVideo(video.url)
+      await saveEntry({ id: fresh.id, video: fresh.video, status: fresh.status, error: fresh.error })
+      window.dispatchEvent(new Event(USAGE_CHANGED))
+      setRestarted(true)
     } catch (err) {
       setRetryError(err.message)
     } finally {
       setRetrying(false)
     }
   }
-
-  const isYoutube = video.source_type === 'youtube'
-  const title = videoTitle(video)
-  const href = `/videos/${video.id}`
 
   return (
     <article
@@ -77,32 +54,38 @@ export default function VideoCard({
         // In selection mode the whole card toggles selection instead of opening the video.
         <button
           type="button"
-          onClick={() => onToggleSelect?.(video.id)}
+          onClick={() => onToggleSelect?.(entry.id)}
           aria-pressed={selected}
           aria-label={`${selected ? 'Deselect' : 'Select'} ${title}`}
           className="absolute inset-0 z-20 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
         >
           <span
             className={`absolute right-3 top-3 flex h-6 w-6 items-center justify-center rounded-full border transition ${
-              selected
-                ? 'border-accent bg-accent text-ink-950'
-                : 'border-white/40 bg-black/50 text-transparent backdrop-blur'
+              selected ? 'border-accent bg-accent text-ink-950' : 'border-white/40 bg-black/50 text-transparent backdrop-blur'
             }`}
           >
             <Check className="h-3.5 w-3.5" strokeWidth={2.6} />
           </span>
         </button>
       )}
+
       <Link
         to={href}
         tabIndex={-1}
         aria-hidden="true"
         className="relative block aspect-video overflow-hidden border-b border-white/[0.06] bg-ink-850"
       >
-        <Thumbnail video={video} />
+        {video?.thumbnail && (
+          <img
+            src={video.thumbnail}
+            alt=""
+            loading="lazy"
+            className="h-full w-full object-cover transition duration-700 group-hover:scale-[1.03]"
+          />
+        )}
         <div className="absolute inset-0 bg-gradient-to-t from-ink-950/80 via-transparent to-transparent" />
         <StatusBadge status={status} className="absolute left-3 top-3" />
-        {video.duration ? (
+        {video?.duration ? (
           <span className="absolute bottom-3 right-3 rounded-md bg-black/70 px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-neutral-200 backdrop-blur">
             {formatTimestamp(video.duration)}
           </span>
@@ -111,16 +94,10 @@ export default function VideoCard({
 
       <div className="flex flex-1 flex-col p-5">
         <div className="flex items-center gap-2 text-[11px] text-neutral-500">
-          {isYoutube ? <Youtube className="h-3.5 w-3.5" /> : <Film className="h-3.5 w-3.5" />}
-          <span>{isYoutube ? 'YouTube' : 'Upload'}</span>
+          <Youtube className="h-3.5 w-3.5" />
+          <span>YouTube</span>
           <span className="text-neutral-700">·</span>
-          <span>{formatRelativeDate(video.created_at)}</span>
-          {!isYoutube && formatFileSize(video.file_size) && (
-            <>
-              <span className="text-neutral-700">·</span>
-              <span>{formatFileSize(video.file_size)}</span>
-            </>
-          )}
+          <span>{formatRelativeDate(entry.savedAt)}</span>
         </div>
 
         <Link
@@ -130,27 +107,16 @@ export default function VideoCard({
           {title}
         </Link>
 
-        {status === 'completed' && video.tldr && (
-          <p className="mt-2 line-clamp-2 text-[13px] leading-relaxed text-neutral-500">{video.tldr}</p>
+        {status === 'completed' && entry.result?.tldr && (
+          <p className="mt-2 line-clamp-2 text-[13px] leading-relaxed text-neutral-500">{entry.result.tldr}</p>
         )}
 
-        {status === 'processing' && (
-          <ProgressBar
-            progress={progress}
-            label={stageLabel(progress, video.source_type)}
-            className="mt-4"
-          />
-        )}
+        {ACTIVE.has(status) && <ProgressBar progress={progress} label={stage} className="mt-4" />}
 
         {status === 'failed' && (
           <div className="relative z-10 mt-4 flex items-center justify-between gap-3">
-            <p className="text-xs text-rose-300/90">{retryError || 'Processing failed.'}</p>
-            <button
-              type="button"
-              onClick={handleRetry}
-              disabled={retrying}
-              className="btn-ghost px-3 py-1.5 text-xs"
-            >
+            <p className="line-clamp-2 text-xs text-rose-300/90">{retryError || error || 'Analysis failed.'}</p>
+            <button type="button" onClick={handleRetry} disabled={retrying} className="btn-ghost shrink-0 px-3 py-1.5 text-xs">
               <Retry className="h-3.5 w-3.5" />
               {retrying ? 'Retrying…' : 'Retry'}
             </button>
@@ -168,23 +134,23 @@ export default function VideoCard({
         <button
           type="button"
           onClick={() => setConfirmingDelete(true)}
-          aria-label={`Delete ${title}`}
+          aria-label={`Remove ${title}`}
           className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs text-neutral-500 transition hover:bg-rose-500/10 hover:text-rose-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/60"
         >
           <Trash className="h-3.5 w-3.5" />
-          Delete
+          Remove
         </button>
       </div>
 
       {confirmingDelete && (
         <ConfirmDialog
-          title="Delete this video?"
-          description="Its transcript, summary, chapters and search index will be removed too."
-          confirmLabel="Delete"
+          title="Remove from your library?"
+          description="It's only removed from this browser. You can analyze the video again any time."
+          confirmLabel="Remove"
           onCancel={() => setConfirmingDelete(false)}
           onConfirm={() => {
             setConfirmingDelete(false)
-            onDelete(video.id)
+            onDelete(entry.id)
           }}
         />
       )}

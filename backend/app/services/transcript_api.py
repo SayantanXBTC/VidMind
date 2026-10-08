@@ -34,7 +34,7 @@ _cache_lock = threading.Lock()
 
 
 def _disk_cache_path(video_id: str):
-    return settings.PROCESSED_DIR / "transcript_cache" / f"{video_id}.json"
+    return settings.CACHE_DIR / "transcripts" / f"{video_id}.json"
 
 
 def _read_disk_cache(video_id: str) -> Optional["TranscriptResult"]:

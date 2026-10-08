@@ -1,7 +1,7 @@
-"""YouTube ingestion: URL validation, metadata, captions-first transcript,
-audio fallback. Kept independent of processing_service.py — this module only
-produces (metadata, segments, language, ingestion_method); the existing
-Whisper/summarization/embedding pipeline is reused unchanged downstream.
+"""YouTube: URL validation, video metadata and caption transcripts.
+
+Uses TranscriptAPI.com when TRANSCRIPT_API_KEY is set (needed on servers,
+which YouTube often blocks), and yt-dlp otherwise or as a fallback.
 """
 import json
 import logging
@@ -9,7 +9,6 @@ import re
 import threading
 import time
 import urllib.request
-import uuid
 from pathlib import Path
 from typing import Optional, TypedDict
 
@@ -385,30 +384,3 @@ def fetch_captions(url: str) -> Optional[tuple[list[TranscriptSegment], str]]:
         len(segments),
     )
     return segments, language.split("-")[0]
-
-
-def download_audio(url: str) -> Path:
-    """Audio-only fallback download. Caller is responsible for deleting the file."""
-    video_id = extract_video_id(url)
-    settings.YOUTUBE_TEMP_DIR.mkdir(parents=True, exist_ok=True)
-    dest_stem = settings.YOUTUBE_TEMP_DIR / f"{uuid.uuid4().hex}"
-
-    try:
-        info, ydl = _run_ydl(
-            canonical_url(video_id),
-            download=True,
-            format="bestaudio/best",
-            outtmpl=str(dest_stem) + ".%(ext)s",
-            skip_download=False,
-        )
-        downloaded_path = Path(ydl.prepare_filename(info))
-    except yt_dlp.utils.DownloadError as exc:
-        raise YouTubeError(_friendly_error(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Unexpected error downloading YouTube audio for %s", video_id)
-        raise YouTubeError("VidMind couldn't retrieve audio for this video.") from exc
-
-    if not downloaded_path.exists():
-        raise YouTubeError("VidMind couldn't retrieve audio for this video.")
-
-    return downloaded_path

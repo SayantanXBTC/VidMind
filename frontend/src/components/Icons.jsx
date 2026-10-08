@@ -31,11 +31,6 @@ export const ArrowUpRight = (p) => (
     <path d="M7 17L17 7M8 7h9v9" />
   </Icon>
 )
-export const Upload = (p) => (
-  <Icon {...p}>
-    <path d="M12 16V4M6 10l6-6 6 6M4 20h16" />
-  </Icon>
-)
 export const Link = (p) => (
   <Icon {...p}>
     <path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1" />
@@ -64,11 +59,6 @@ export const Retry = (p) => (
     <path d="M4 12a8 8 0 0 1 14-5.3L20 9M20 4v5h-5M20 12a8 8 0 0 1-14 5.3L4 15M4 20v-5h5" />
   </Icon>
 )
-export const Play = (p) => (
-  <Icon {...p}>
-    <path d="M7 5v14l12-7z" fill="currentColor" stroke="none" />
-  </Icon>
-)
 export const Youtube = (p) => (
   <Icon {...p}>
     <rect x="2.5" y="5.5" width="19" height="13" rx="4" />
@@ -90,12 +80,6 @@ export const Copy = (p) => (
   <Icon {...p}>
     <rect x="8" y="8" width="12" height="12" rx="2.5" />
     <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
-  </Icon>
-)
-export const Lock = (p) => (
-  <Icon {...p}>
-    <rect x="5" y="11" width="14" height="9" rx="2.5" />
-    <path d="M8 11V8a4 4 0 0 1 8 0v3" />
   </Icon>
 )
 export const Bolt = (p) => (

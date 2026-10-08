@@ -85,6 +85,7 @@ class OllamaService:
         max_tokens: int = 2048,
         expected_tokens: Optional[int] = None,
         on_progress: Optional[Callable[[float], None]] = None,
+        context: Optional[str] = None,
     ) -> dict:
         """Run one chat completion constrained to `schema` and return the parsed JSON.
 
@@ -97,7 +98,7 @@ class OllamaService:
             "format": schema,
             "keep_alive": settings.OLLAMA_KEEP_ALIVE,
             "messages": [
-                {"role": "system", "content": system},
+                {"role": "system", "content": f"{system}\n\n{context}" if context else system},
                 {"role": "user", "content": user},
             ],
             "options": {
@@ -217,6 +218,18 @@ class ClaudeService:
             )
         return self._client
 
+    @staticmethod
+    def _system_blocks(system: str, context: Optional[str]):
+        """Large shared context (a video's transcript) goes in its own system
+        block marked for prompt caching: follow-up questions about the same
+        video then reuse it at a fraction of the input cost."""
+        if not context:
+            return system
+        return [
+            {"type": "text", "text": system},
+            {"type": "text", "text": context, "cache_control": {"type": "ephemeral"}},
+        ]
+
     def chat_json(
         self,
         system: str,
@@ -226,6 +239,7 @@ class ClaudeService:
         max_tokens: int = 2048,
         expected_tokens: Optional[int] = None,
         on_progress: Optional[Callable[[float], None]] = None,
+        context: Optional[str] = None,
     ) -> dict:
         # Thinking tokens count toward max_tokens, so leave generous headroom;
         # streaming keeps long generations clear of HTTP timeouts.
@@ -237,7 +251,7 @@ class ClaudeService:
             with self._get_client().beta.messages.stream(
                 model=self.model,
                 max_tokens=budget,
-                system=system,
+                system=self._system_blocks(system, context),
                 messages=[{"role": "user", "content": user}],
                 output_config={
                     "effort": settings.ANTHROPIC_EFFORT,
@@ -271,9 +285,10 @@ class ClaudeService:
         content = "".join(block.text for block in message.content if block.type == "text")
         usage = message.usage
         logger.info(
-            "LLM call: model=%s in=%d out=%d seconds=%.1f",
+            "LLM call: model=%s in=%d cached=%d out=%d seconds=%.1f",
             message.model,
             usage.input_tokens,
+            getattr(usage, "cache_read_input_tokens", 0) or 0,
             usage.output_tokens,
             time.monotonic() - started,
         )

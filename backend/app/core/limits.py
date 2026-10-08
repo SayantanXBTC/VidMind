@@ -1,42 +1,79 @@
-"""Per-user usage limits that keep a public deployment's costs bounded."""
+"""Usage limits for an open website with no accounts.
+
+Visitors are identified by IP address. Only *new* analyses count: videos
+already in the cache are free to serve. A site-wide daily cap bounds the
+total AI and transcript bill no matter how many IPs show up. All counters
+are in memory, so they reset on restart — acceptable for cost control, and
+it keeps the app free of a database.
+"""
 import threading
 import time
 from collections import defaultdict, deque
-from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.video import Video, VideoStatus
+
+DAY = 24 * 3600
+HOUR = 3600
 
 
-def videos_created_today(db: Session, user_id: str) -> int:
-    since = datetime.now(timezone.utc) - timedelta(hours=24)
-    return db.query(Video).filter(Video.user_id == user_id, Video.created_at >= since).count()
+class _Window:
+    """Timestamps of events in a sliding window, per key."""
+
+    def __init__(self) -> None:
+        self._events: dict[str, deque] = defaultdict(deque)
+        self._lock = threading.Lock()
+
+    def count(self, key: str, window: int) -> int:
+        now = time.time()
+        with self._lock:
+            events = self._events[key]
+            while events and now - events[0] > window:
+                events.popleft()
+            if not events:
+                self._events.pop(key, None)
+                return 0
+            return len(events)
+
+    def add(self, key: str) -> None:
+        with self._lock:
+            self._events[key].append(time.time())
 
 
-def check_can_start_video(db: Session, user_id: str) -> None:
-    """Raise 429 when the user hit the daily quota or has too many jobs running."""
-    if settings.DAILY_VIDEO_LIMIT and videos_created_today(db, user_id) >= settings.DAILY_VIDEO_LIMIT:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"You've reached today's limit of {settings.DAILY_VIDEO_LIMIT} videos. Try again tomorrow.",
+_analyses = _Window()
+_questions = _Window()
+_SITE = "__site__"
+
+
+def _too_many(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=detail)
+
+
+def check_can_analyze(ip: str, active_jobs: int) -> None:
+    if settings.ANALYSES_PER_DAY_TOTAL and _analyses.count(_SITE, DAY) >= settings.ANALYSES_PER_DAY_TOTAL:
+        raise _too_many(
+            "VidMind has reached today's limit for new videos. Videos others have already analyzed still work, "
+            "and new ones open up again tomorrow."
         )
-    if settings.MAX_ACTIVE_JOBS_PER_USER:
-        active = (
-            db.query(Video)
-            .filter(
-                Video.user_id == user_id,
-                Video.status.in_([VideoStatus.UPLOADED, VideoStatus.PROCESSING]),
-            )
-            .count()
+    if settings.ANALYSES_PER_IP_PER_DAY and _analyses.count(ip, DAY) >= settings.ANALYSES_PER_IP_PER_DAY:
+        raise _too_many(
+            f"You've analyzed {settings.ANALYSES_PER_IP_PER_DAY} new videos today, the daily limit. Try again tomorrow."
         )
-        if active >= settings.MAX_ACTIVE_JOBS_PER_USER:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="You already have videos being analyzed. Wait for one to finish, then try again.",
-            )
+    if active_jobs >= 2:
+        raise _too_many("You already have videos being analyzed. Wait for one to finish, then try again.")
+
+
+def record_analysis(ip: str) -> None:
+    _analyses.add(ip)
+    _analyses.add(_SITE)
+
+
+def check_and_record_question(ip: str) -> None:
+    limit = settings.QUESTIONS_PER_IP_PER_HOUR
+    if limit and _questions.count(ip, HOUR) >= limit:
+        raise _too_many("You're asking questions very quickly. Wait a few minutes and try again.")
+    _questions.add(ip)
 
 
 def check_duration(duration_seconds: float | None) -> None:
@@ -47,40 +84,9 @@ def check_duration(duration_seconds: float | None) -> None:
         )
 
 
-class _SlidingWindowLimiter:
-    """In-memory per-user limiter. Per-process, which is fine for one API instance."""
-
-    def __init__(self) -> None:
-        self._events: dict[str, deque] = defaultdict(deque)
-        self._lock = threading.Lock()
-
-    def hit(self, key: str, limit: int, window_seconds: int) -> bool:
-        now = time.monotonic()
-        with self._lock:
-            events = self._events[key]
-            while events and now - events[0] > window_seconds:
-                events.popleft()
-            if len(events) >= limit:
-                return False
-            events.append(now)
-            return True
-
-
-_ask_limiter = _SlidingWindowLimiter()
-_search_limiter = _SlidingWindowLimiter()
-
-
-def check_search_rate(user_id: str) -> None:
-    if settings.SEARCH_LIMIT_PER_HOUR and not _search_limiter.hit(user_id, settings.SEARCH_LIMIT_PER_HOUR, 3600):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="You're searching very quickly. Wait a few minutes and try again.",
-        )
-
-
-def check_ask_rate(user_id: str) -> None:
-    if settings.ASK_LIMIT_PER_HOUR and not _ask_limiter.hit(user_id, settings.ASK_LIMIT_PER_HOUR, 3600):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="You're asking questions very quickly. Wait a few minutes and try again.",
-        )
+def usage_for(ip: str) -> dict:
+    return {
+        "analyses_today": _analyses.count(ip, DAY),
+        "analyses_per_day": settings.ANALYSES_PER_IP_PER_DAY or None,
+        "max_video_minutes": settings.MAX_VIDEO_MINUTES or None,
+    }

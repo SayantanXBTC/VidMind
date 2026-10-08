@@ -1,8 +1,8 @@
 import ProgressBar from './ProgressBar.jsx'
 import { Check } from './Icons.jsx'
-import { getTimelineSteps, stageLabel } from '../utils/stage.js'
+import { getTimelineSteps } from '../utils/stage.js'
 
-export default function ProcessingTimeline({ progress, sourceType }) {
+export default function ProcessingTimeline({ progress, stage }) {
   const steps = getTimelineSteps(progress)
 
   return (
@@ -13,7 +13,7 @@ export default function ProcessingTimeline({ progress, sourceType }) {
           <div>
             <p className="eyebrow">Analyzing</p>
             <p className="mt-2 font-display text-3xl text-neutral-50 sm:text-4xl">
-              {stageLabel(progress, sourceType)}
+              {stage || 'Analyzing'}
               <span className="animate-pulse text-accent">…</span>
             </p>
           </div>
@@ -22,7 +22,7 @@ export default function ProcessingTimeline({ progress, sourceType }) {
 
         <ProgressBar progress={progress} className="mt-6" />
 
-        <ol className="mt-6 grid grid-cols-5 gap-2">
+        <ol className="mt-6 grid grid-cols-4 gap-2">
           {steps.map((step) => (
             <li key={step.key} className="flex flex-col items-start gap-2">
               <span

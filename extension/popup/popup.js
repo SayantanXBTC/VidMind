@@ -115,7 +115,7 @@ function escapeHtml(str) {
 async function startAnalysis(url) {
   renderProcessing(5)
   try {
-    const response = await fetch(`${backendUrl}/api/videos/youtube`, {
+    const response = await fetch(`${backendUrl}/api/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),
@@ -134,16 +134,16 @@ function pollStatus(id) {
   if (pollTimer) clearInterval(pollTimer)
   pollTimer = setInterval(async () => {
     try {
-      const response = await fetch(`${backendUrl}/api/videos/${id}/status`)
+      const response = await fetch(`${backendUrl}/api/videos/${id}?include_result=false`)
       const status = await response.json()
       if (status.status === 'completed') {
         clearInterval(pollTimer)
         let summaryText = ''
         try {
-          const summaryRes = await fetch(`${backendUrl}/api/videos/${id}/summary`)
-          if (summaryRes.ok) {
-            const summary = await summaryRes.json()
-            summaryText = summary.summary
+          const full = await fetch(`${backendUrl}/api/videos/${id}`)
+          if (full.ok) {
+            const data = await full.json()
+            summaryText = data.result?.tldr || data.result?.summary || ''
           }
         } catch {
           // summary fetch failing shouldn't block "ready" state

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.schemas.video import HealthResponse
+from app.schemas import HealthResponse
 
 router = APIRouter()
 

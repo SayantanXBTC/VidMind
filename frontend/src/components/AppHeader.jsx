@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useAuth } from '../auth/AuthProvider.jsx'
+import { getUsage } from '../services/api.js'
 
 export function Logo() {
   return (
@@ -31,80 +31,49 @@ export function Logo() {
   )
 }
 
-function QuotaChip({ account }) {
-  if (!account?.daily_limit) return null
-  const left = Math.max(0, account.daily_limit - account.used_today)
+export const USAGE_CHANGED = 'vidmind:usage-changed'
+
+/** "3 of 5 new videos left today" — refreshed whenever a new analysis starts. */
+function UsageChip() {
+  const [usage, setUsage] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = () =>
+      getUsage()
+        .then((u) => !cancelled && setUsage(u))
+        .catch(() => {})
+    load()
+    window.addEventListener(USAGE_CHANGED, load)
+    return () => {
+      cancelled = true
+      window.removeEventListener(USAGE_CHANGED, load)
+    }
+  }, [])
+
+  if (!usage?.analyses_per_day) return null
+  const left = Math.max(0, usage.analyses_per_day - usage.analyses_today)
   return (
     <span
       className={`hidden items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] sm:inline-flex ${
         left === 0 ? 'border-rose-400/30 text-rose-300' : 'border-white/[0.08] text-neutral-400'
       }`}
-      title="Videos you can still analyze in the next 24 hours"
+      title="New videos you can analyze in the next 24 hours. Videos someone already analyzed are free."
     >
       <span className={`h-1.5 w-1.5 rounded-full ${left === 0 ? 'bg-rose-400' : 'bg-emerald-400'}`} />
-      {left} of {account.daily_limit} left today
+      {left} of {usage.analyses_per_day} new videos left today
     </span>
   )
 }
 
-function UserMenu() {
-  const { user, signOut } = useAuth()
-  const [open, setOpen] = useState(false)
-  const ref = useRef(null)
-
-  useEffect(() => {
-    if (!open) return undefined
-    const close = (e) => {
-      if (!ref.current?.contains(e.target)) setOpen(false)
-    }
-    document.addEventListener('mousedown', close)
-    return () => document.removeEventListener('mousedown', close)
-  }, [open])
-
-  const email = user?.email || 'Account'
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label="Account menu"
-        className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-gradient-to-b from-accent/25 to-accent-strong/10 text-sm font-medium uppercase text-neutral-100 transition hover:border-white/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-      >
-        {email[0]}
-      </button>
-      {open && (
-        <div role="menu" className="card absolute right-0 top-11 w-60 animate-fade-up p-2">
-          <p className="truncate px-3 py-2 text-xs text-neutral-500">{email}</p>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={signOut}
-            className="w-full rounded-xl px-3 py-2 text-left text-sm text-neutral-200 transition hover:bg-white/[0.06]"
-          >
-            Sign out
-          </button>
-        </div>
-      )}
-    </div>
-  )
-}
-
 export default function AppHeader({ children }) {
-  const { authEnabled, signedIn, account } = useAuth()
   return (
     <header className="sticky top-0 z-40 border-b border-white/[0.06] bg-ink-950/70 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-5 sm:px-8">
         <Logo />
         <div className="flex items-center gap-2">
           {children}
-          {authEnabled && signedIn && (
-            <>
-              <QuotaChip account={account} />
-              <UserMenu />
-            </>
-          )}
+          <UsageChip />
         </div>
       </div>
     </header>

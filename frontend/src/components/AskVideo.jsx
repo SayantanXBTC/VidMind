@@ -11,7 +11,7 @@ function suggestionsFor(chapters) {
   return [...base, ...fromChapters].slice(0, 4)
 }
 
-export default function AskVideo({ videoId, embeddingStatus, chapters, onSeek }) {
+export default function AskVideo({ videoId, chapters, onSeek, onRestore }) {
   const [question, setQuestion] = useState('')
   const [thread, setThread] = useState([]) // [{ id, question, answer?, sources?, error?, loading }]
   const endRef = useRef(null)
@@ -29,20 +29,23 @@ export default function AskVideo({ videoId, embeddingStatus, chapters, onSeek })
     setQuestion('')
     setThread((prev) => [...prev, { id, question: q, loading: true }])
     try {
-      const data = await askVideo(videoId, q)
-      setThread((prev) => prev.map((t) => (t.id === id ? { ...t, ...data, loading: false } : t)))
+      let data
+      try {
+        data = await askVideo(videoId, q)
+      } catch (err) {
+        if (err.status !== 409 || !onRestore) throw err
+        // The server no longer has this video (e.g. after a redeploy):
+        // analyze it again, then ask.
+        setThread((prev) => prev.map((t) => (t.id === id ? { ...t, restoring: true } : t)))
+        await onRestore()
+        data = await askVideo(videoId, q)
+      }
+      setThread((prev) => prev.map((t) => (t.id === id ? { ...t, ...data, loading: false, restoring: false } : t)))
     } catch (err) {
       setThread((prev) =>
         prev.map((t) => (t.id === id ? { ...t, error: err.message, loading: false } : t))
       )
     }
-  }
-
-  if (embeddingStatus === 'pending' || embeddingStatus === 'processing') {
-    return <p className="text-sm text-neutral-500">Preparing the search index…</p>
-  }
-  if (embeddingStatus === 'failed') {
-    return <p className="text-sm text-neutral-500">Ask isn't available for this video.</p>
   }
 
   return (
@@ -87,6 +90,9 @@ export default function AskVideo({ videoId, embeddingStatus, chapters, onSeek })
               <div className="min-w-0 flex-1">
                 {t.loading ? (
                   <div className="space-y-2 pt-1.5">
+                    {t.restoring && (
+                      <p className="text-xs text-neutral-500">Refreshing this video on the server first…</p>
+                    )}
                     <div className="skeleton h-3 w-11/12" />
                     <div className="skeleton h-3 w-8/12" />
                   </div>

@@ -6,7 +6,6 @@ Written as pure ASGI middleware so they also cover streaming request bodies
 """
 import json
 import logging
-import re
 import time
 from collections import defaultdict, deque
 from threading import Lock
@@ -15,7 +14,6 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-_UPLOAD_PATH = "/api/videos/upload"
 _EXEMPT_FROM_RATE_LIMIT = {"/api/health"}
 
 _SECURITY_HEADERS = [
@@ -116,7 +114,7 @@ class SecurityHeadersMiddleware:
                 extra = list(_SECURITY_HEADERS)
                 if not is_docs:
                     extra.append(_API_CSP)
-                    # Responses carry private, per-user data.
+                    # Job status changes from second to second; never cache it.
                     extra.append((b"cache-control", b"no-store"))
                 if add_hsts:
                     extra.append(_HSTS)
@@ -129,13 +127,13 @@ class SecurityHeadersMiddleware:
 
 class BodySizeLimitMiddleware:
     """Reject oversized JSON bodies early, including chunked ones without a
-    Content-Length. The upload route enforces its own (much larger) limit."""
+    Content-Length."""
 
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope["path"] == _UPLOAD_PATH:
+        if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
@@ -145,8 +143,8 @@ class BodySizeLimitMiddleware:
             await _send_json(send, 413, "Request body is too large.")
             return
 
-        # Non-upload bodies are small JSON, so buffer them (up to the limit)
-        # and replay them to the app.
+        # Bodies are small JSON, so buffer them (up to the limit) and replay
+        # them to the app.
         chunks: list[bytes] = []
         received = 0
         while True:
@@ -177,9 +175,9 @@ class BodySizeLimitMiddleware:
 class RateLimitMiddleware:
     """Sliding-window limit of RATE_LIMIT_PER_MINUTE requests per client IP.
 
-    In-memory, so it's per process — fine for one API instance. Per-user
-    quotas (app/core/limits.py) are the main cost control; this one stops
-    floods and scripted abuse before they reach the database.
+    In-memory, so it's per process — fine for one API instance. The daily
+    analysis limits (app/core/limits.py) are the main cost control; this one
+    stops floods and scripted abuse.
     """
 
     def __init__(self, app):
@@ -249,19 +247,3 @@ class CatchAllMiddleware:
             logger.exception("Unhandled error on %s %s", scope.get("method"), scope.get("path"))
             if not started:
                 await _send_json(send, 500, "Something went wrong on our side. Try again in a moment.")
-
-
-_TOKEN_IN_URL = re.compile(r"(access_token=)[^&\s\"]+")
-
-
-class RedactTokensFilter(logging.Filter):
-    """Keep sign-in tokens (passed in the URL for <video src> requests) out of logs."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        if record.args:
-            record.args = tuple(
-                _TOKEN_IN_URL.sub(r"\1[redacted]", a) if isinstance(a, str) else a for a in record.args
-            )
-        if isinstance(record.msg, str):
-            record.msg = _TOKEN_IN_URL.sub(r"\1[redacted]", record.msg)
-        return True

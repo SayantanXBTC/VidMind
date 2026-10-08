@@ -1,8 +1,7 @@
 venv/
 __pycache__/
 **/__pycache__/
-*.db
+tests/
+cache/
 .env
 *cookies*.txt
-uploads/
-processed/

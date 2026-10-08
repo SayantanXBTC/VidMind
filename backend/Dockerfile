@@ -2,28 +2,18 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    HF_HOME=/opt/hf
-
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
 COPY requirements.txt .
-# CPU-only PyTorch wheels: the CUDA build is several GB larger and unused here.
-RUN pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+RUN pip install -r requirements.txt
 
-# Bake the embedding model into the image so cold starts don't download it.
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
+COPY app ./app
 
-COPY . .
-RUN chmod +x start.sh
+# Result cache (optional persistent disk: mount a volume at /data).
+ENV CACHE_DIR=/data/cache
 
-# Production defaults; override per environment. /data is a persistent volume.
-ENV UPLOAD_DIR=/data/uploads \
-    PROCESSED_DIR=/data/processed \
-    JOB_MODE=queue
-
-EXPOSE 8000
-
-CMD ["./start.sh"]
+# Railway/Render set $PORT; one worker process keeps the in-memory cache and
+# limits consistent (jobs run on a thread pool inside it).
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
